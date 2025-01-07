@@ -1,12 +1,10 @@
 import { LocationQuery, LocationQueryRaw } from './query'
-import {
-  RouteLocation,
-  RouteLocationNormalized,
-  RouteParamValue,
-} from './types'
+import { RouteParamValue, RouteParamsGeneric } from './types'
 import { RouteRecord } from './matcher/types'
 import { warn } from './warning'
 import { isArray } from './utils'
+import { decode } from './encoding'
+import { RouteLocation, RouteLocationNormalizedLoaded } from './typed-routes'
 
 /**
  * Location object returned by {@link `parseURL`}.
@@ -85,7 +83,7 @@ export function parseURL(
     fullPath: path + (searchString && '?') + searchString + hash,
     path,
     query,
-    hash,
+    hash: decode(hash),
   }
 }
 
@@ -121,6 +119,7 @@ export function stripBase(pathname: string, base: string): string {
  * pointing towards the same {@link RouteRecord} and that all `params`, `query`
  * parameters and `hash` are the same
  *
+ * @param stringifyQuery - A function that takes a query object of type LocationQueryRaw and returns a string representation of it.
  * @param a - first {@link RouteLocation}
  * @param b - second {@link RouteLocation}
  */
@@ -157,8 +156,8 @@ export function isSameRouteRecord(a: RouteRecord, b: RouteRecord): boolean {
 }
 
 export function isSameRouteLocationParams(
-  a: RouteLocationNormalized['params'],
-  b: RouteLocationNormalized['params']
+  a: RouteParamsGeneric,
+  b: RouteParamsGeneric
 ): boolean {
   if (Object.keys(a).length !== Object.keys(b).length) return false
 
@@ -242,9 +241,34 @@ export function resolveRelativePath(to: string, from: string): string {
   return (
     fromSegments.slice(0, position).join('/') +
     '/' +
-    toSegments
-      // ensure we use at least the last element in the toSegments
-      .slice(toPosition - (toPosition === toSegments.length ? 1 : 0))
-      .join('/')
+    toSegments.slice(toPosition).join('/')
   )
+}
+
+/**
+ * Initial route location where the router is. Can be used in navigation guards
+ * to differentiate the initial navigation.
+ *
+ * @example
+ * ```js
+ * import { START_LOCATION } from 'vue-router'
+ *
+ * router.beforeEach((to, from) => {
+ *   if (from === START_LOCATION) {
+ *     // initial navigation
+ *   }
+ * })
+ * ```
+ */
+export const START_LOCATION_NORMALIZED: RouteLocationNormalizedLoaded = {
+  path: '/',
+  // TODO: could we use a symbol in the future?
+  name: undefined,
+  params: {},
+  query: {},
+  hash: '',
+  fullPath: '/',
+  matched: [],
+  meta: {},
+  redirectedFrom: undefined,
 }

@@ -1,19 +1,25 @@
 import {
-  RouteLocationNormalized,
   RouteRecordRaw,
-  RouteLocationRaw,
-  NavigationHookAfter,
-  START_LOCATION_NORMALIZED,
   Lazy,
-  RouteLocationNormalizedLoaded,
-  RouteLocation,
-  RouteRecordName,
+  isRouteLocation,
   isRouteName,
-  NavigationGuardWithThis,
   RouteLocationOptions,
   MatcherLocationRaw,
-  RouteParams,
 } from './types'
+import type {
+  RouteLocation,
+  RouteLocationRaw,
+  RouteParams,
+  RouteLocationNormalized,
+  RouteLocationNormalizedLoaded,
+  NavigationGuardWithThis,
+  NavigationHookAfter,
+  RouteLocationResolved,
+  RouteLocationAsRelative,
+  RouteLocationAsPath,
+  RouteLocationAsString,
+  RouteRecordNameGeneric,
+} from './typed-routes'
 import { RouterHistory, HistoryState, NavigationType } from './history/common'
 import {
   ScrollPosition,
@@ -41,22 +47,14 @@ import {
   stringifyQuery as originalStringifyQuery,
   LocationQuery,
 } from './query'
-import {
-  shallowRef,
-  Ref,
-  nextTick,
-  App,
-  ComputedRef,
-  reactive,
-  unref,
-  computed,
-} from 'vue'
+import { shallowRef, Ref, nextTick, App, unref, shallowReactive } from 'vue'
 import { RouteRecord, RouteRecordNormalized } from './matcher/types'
 import {
   parseURL,
   stringifyURL,
   isSameRouteLocation,
   isSameRouteRecord,
+  START_LOCATION_NORMALIZED,
 } from './location'
 import { extractComponentsGuards, guardToPromiseFn } from './navigationGuards'
 import { warn } from './warning'
@@ -68,6 +66,9 @@ import {
   routerViewLocationKey,
 } from './injectionSymbols'
 import { addDevtools } from './devtools'
+import { _LiteralUnion } from './types/utils'
+import { RouteLocationAsRelativeTyped } from './typed-routes/route-location'
+import { RouteMap } from './typed-routes/route-map'
 
 /**
  * Internal type to define an ErrorHandler
@@ -77,11 +78,13 @@ import { addDevtools } from './devtools'
  * @param from - location we were navigating from when the error happened
  * @internal
  */
-export type _ErrorHandler = (
-  error: any,
-  to: RouteLocationNormalized,
-  from: RouteLocationNormalizedLoaded
-) => any
+export interface _ErrorListener {
+  (
+    error: any,
+    to: RouteLocationNormalized,
+    from: RouteLocationNormalizedLoaded
+  ): any
+}
 // resolve, reject arguments of Promise constructor
 type OnReadyCallback = [() => void, (reason?: any) => void]
 
@@ -198,7 +201,7 @@ export interface Router {
   readonly options: RouterOptions
 
   /**
-   * Allows turning off the listening of history events. This is a low level api for micro-frontends.
+   * Allows turning off the listening of history events. This is a low level api for micro-frontend.
    */
   listening: boolean
 
@@ -208,7 +211,11 @@ export interface Router {
    * @param parentName - Parent Route Record where `route` should be appended at
    * @param route - Route Record to add
    */
-  addRoute(parentName: RouteRecordName, route: RouteRecordRaw): () => void
+  addRoute(
+    // NOTE: it could be `keyof RouteMap` but the point of dynamic routes is not knowing the routes at build
+    parentName: NonNullable<RouteRecordNameGeneric>,
+    route: RouteRecordRaw
+  ): () => void
   /**
    * Add a new {@link RouteRecordRaw | route record} to the router.
    *
@@ -220,17 +227,22 @@ export interface Router {
    *
    * @param name - Name of the route to remove
    */
-  removeRoute(name: RouteRecordName): void
+  removeRoute(name: NonNullable<RouteRecordNameGeneric>): void
   /**
    * Checks if a route with a given name exists
    *
    * @param name - Name of the route to check
    */
-  hasRoute(name: RouteRecordName): boolean
+  hasRoute(name: NonNullable<RouteRecordNameGeneric>): boolean
   /**
    * Get a full list of all the {@link RouteRecord | route records}.
    */
   getRoutes(): RouteRecord[]
+
+  /**
+   * Delete all routes from the router matcher.
+   */
+  clearRoutes(): void
 
   /**
    * Returns the {@link RouteLocation | normalized version} of a
@@ -241,10 +253,17 @@ export interface Router {
    * @param to - Raw route location to resolve
    * @param currentLocation - Optional current location to resolve against
    */
-  resolve(
-    to: RouteLocationRaw,
+  resolve<Name extends keyof RouteMap = keyof RouteMap>(
+    to: RouteLocationAsRelativeTyped<RouteMap, Name>,
+    // NOTE: This version doesn't work probably because it infers the type too early
+    // | RouteLocationAsRelative<Name>
     currentLocation?: RouteLocationNormalizedLoaded
-  ): RouteLocation & { href: string }
+  ): RouteLocationResolved<Name>
+  resolve(
+    // not having the overload produces errors in RouterLink calls to router.resolve()
+    to: RouteLocationAsString | RouteLocationAsRelative | RouteLocationAsPath,
+    currentLocation?: RouteLocationNormalizedLoaded
+  ): RouteLocationResolved
 
   /**
    * Programmatically navigate to a new URL by pushing an entry in the history
@@ -294,6 +313,9 @@ export interface Router {
    * navigation guards have been successful. Returns a function that removes the
    * registered guard.
    *
+   * @param guard - navigation guard to add
+   * @returns a function that removes the registered guard
+   *
    * @example
    * ```js
    * router.beforeResolve(to => {
@@ -301,12 +323,15 @@ export interface Router {
    * })
    * ```
    *
-   * @param guard - navigation guard to add
    */
   beforeResolve(guard: NavigationGuardWithThis<undefined>): () => void
+
   /**
    * Add a navigation hook that is executed after every navigation. Returns a
    * function that removes the registered hook.
+   *
+   * @param guard - navigation hook to add
+   * @returns a function that removes the registered hook
    *
    * @example
    * ```js
@@ -316,8 +341,6 @@ export interface Router {
    *   }
    * })
    * ```
-   *
-   * @param guard - navigation hook to add
    */
   afterEach(guard: NavigationHookAfter): () => void
 
@@ -330,7 +353,7 @@ export interface Router {
    *
    * @param handler - error handler to register
    */
-  onError(handler: _ErrorHandler): () => void
+  onError(handler: _ErrorListener): () => void
   /**
    * Returns a Promise that resolves when the router has completed the initial
    * navigation, which means it has resolved all async enter hooks and async
@@ -367,7 +390,7 @@ export function createRouter(options: RouterOptions): Router {
   if (__DEV__ && !routerHistory)
     throw new Error(
       'Provide the "history" option when calling "createRouter()":' +
-        ' https://next.router.vuejs.org/api/#history.'
+        ' https://router.vuejs.org/api/interfaces/RouterOptions.html#history'
     )
 
   const beforeGuards = useCallbacks<NavigationGuardWithThis<undefined>>()
@@ -393,13 +416,21 @@ export function createRouter(options: RouterOptions): Router {
     applyToParams.bind(null, decode)
 
   function addRoute(
-    parentOrRoute: RouteRecordName | RouteRecordRaw,
+    parentOrRoute: NonNullable<RouteRecordNameGeneric> | RouteRecordRaw,
     route?: RouteRecordRaw
   ) {
     let parent: Parameters<(typeof matcher)['addRoute']>[1] | undefined
     let record: RouteRecordRaw
     if (isRouteName(parentOrRoute)) {
       parent = matcher.getRecordMatcher(parentOrRoute)
+      if (__DEV__ && !parent) {
+        warn(
+          `Parent route "${String(
+            parentOrRoute
+          )}" not found when adding child route`,
+          route
+        )
+      }
       record = route!
     } else {
       record = parentOrRoute
@@ -408,7 +439,7 @@ export function createRouter(options: RouterOptions): Router {
     return matcher.addRoute(record, parent)
   }
 
-  function removeRoute(name: RouteRecordName) {
+  function removeRoute(name: NonNullable<RouteRecordNameGeneric>) {
     const recordMatcher = matcher.getRecordMatcher(name)
     if (recordMatcher) {
       matcher.removeRoute(recordMatcher)
@@ -421,14 +452,15 @@ export function createRouter(options: RouterOptions): Router {
     return matcher.getRoutes().map(routeMatcher => routeMatcher.record)
   }
 
-  function hasRoute(name: RouteRecordName): boolean {
+  function hasRoute(name: NonNullable<RouteRecordNameGeneric>): boolean {
     return !!matcher.getRecordMatcher(name)
   }
 
   function resolve(
-    rawLocation: Readonly<RouteLocationRaw>,
+    rawLocation: RouteLocationRaw,
     currentLocation?: RouteLocationNormalizedLoaded
-  ): RouteLocation & { href: string } {
+  ): RouteLocationResolved {
+    // const resolve: Router['resolve'] = (rawLocation: RouteLocationRaw, currentLocation) => {
     // const objectLocation = routerLocationAsObject(rawLocation)
     // we create a copy to modify it later
     currentLocation = assign({}, currentLocation || currentRoute.value)
@@ -463,10 +495,18 @@ export function createRouter(options: RouterOptions): Router {
       })
     }
 
+    if (__DEV__ && !isRouteLocation(rawLocation)) {
+      warn(
+        `router.resolve() was passed an invalid location. This will fail in production.\n- Location:`,
+        rawLocation
+      )
+      return resolve({})
+    }
+
     let matcherLocation: MatcherLocationRaw
 
     // path could be relative in object as well
-    if ('path' in rawLocation) {
+    if (rawLocation.path != null) {
       if (
         __DEV__ &&
         'params' in rawLocation &&
@@ -491,7 +531,7 @@ export function createRouter(options: RouterOptions): Router {
       }
       // pass encoded values to the matcher, so it can produce encoded path and fullPath
       matcherLocation = assign({}, rawLocation, {
-        params: encodeParams(rawLocation.params),
+        params: encodeParams(targetParams),
       })
       // current location params are decoded, we need to encode them in case the
       // matcher merges the params
@@ -528,7 +568,7 @@ export function createRouter(options: RouterOptions): Router {
       } else if (!matchedRoute.matched.length) {
         warn(
           `No match found for location with path "${
-            'path' in rawLocation ? rawLocation.path : rawLocation
+            rawLocation.path != null ? rawLocation.path : rawLocation
           }"`
         )
       }
@@ -609,7 +649,7 @@ export function createRouter(options: RouterOptions): Router {
 
       if (
         __DEV__ &&
-        !('path' in newTargetLocation) &&
+        newTargetLocation.path == null &&
         !('name' in newTargetLocation)
       ) {
         warn(
@@ -629,7 +669,7 @@ export function createRouter(options: RouterOptions): Router {
           query: to.query,
           hash: to.hash,
           // avoid transferring params if the redirect has a path
-          params: 'path' in newTargetLocation ? {} : to.params,
+          params: newTargetLocation.path != null ? {} : to.params,
         },
         newTargetLocation
       )
@@ -719,7 +759,7 @@ export function createRouter(options: RouterOptions): Router {
                 : 1) > 30
             ) {
               warn(
-                `Detected a possibly infinite redirection in a navigation guard when going from "${from.fullPath}" to "${toLocation.fullPath}". Aborting to avoid a Stack Overflow. This might break in production if not fixed.`
+                `Detected a possibly infinite redirection in a navigation guard when going from "${from.fullPath}" to "${toLocation.fullPath}". Aborting to avoid a Stack Overflow.\n Are you always returning a new location within a navigation guard? That would lead to this error. Only return when redirecting or aborting, that should fix this. This might break in production if not fixed.`
               )
               return Promise.reject(
                 new Error('Infinite redirect in navigation guard')
@@ -776,6 +816,14 @@ export function createRouter(options: RouterOptions): Router {
   ): Promise<void> {
     const error = checkCanceledNavigation(to, from)
     return error ? Promise.reject(error) : Promise.resolve()
+  }
+
+  function runWithContext<T>(fn: () => T): T {
+    const app: App | undefined = installedApps.values().next().value
+    // support Vue < 3.3
+    return app && typeof app.runWithContext === 'function'
+      ? app.runWithContext(fn)
+      : fn()
   }
 
   // TODO: refactor the whole before guards by internally using router.beforeEach
@@ -847,9 +895,9 @@ export function createRouter(options: RouterOptions): Router {
         .then(() => {
           // check the route beforeEnter
           guards = []
-          for (const record of to.matched) {
+          for (const record of enteringRecords) {
             // do not trigger beforeEnter on reused views
-            if (record.beforeEnter && !from.matched.includes(record)) {
+            if (record.beforeEnter) {
               if (isArray(record.beforeEnter)) {
                 for (const beforeEnter of record.beforeEnter)
                   guards.push(guardToPromiseFn(beforeEnter, to, from))
@@ -874,7 +922,8 @@ export function createRouter(options: RouterOptions): Router {
             enteringRecords,
             'beforeRouteEnter',
             to,
-            from
+            from,
+            runWithContext
           )
           guards.push(canceledNavigationCheck)
 
@@ -907,7 +956,9 @@ export function createRouter(options: RouterOptions): Router {
   ): void {
     // navigation is confirmed, call afterGuards
     // TODO: wrap with error handlers
-    for (const guard of afterGuards.list()) guard(to, from, failure)
+    afterGuards
+      .list()
+      .forEach(guard => runWithContext(() => guard(to, from, failure)))
   }
 
   /**
@@ -928,7 +979,7 @@ export function createRouter(options: RouterOptions): Router {
 
     // only consider as push if it's not the first navigation
     const isFirstNavigation = from === START_LOCATION_NORMALIZED
-    const state = !isBrowser ? {} : history.state
+    const state: Partial<HistoryState> | null = !isBrowser ? {} : history.state
 
     // change URL only if the user did a push/replace and if it's not the initial navigation because
     // it's just reflecting the url
@@ -971,7 +1022,7 @@ export function createRouter(options: RouterOptions): Router {
       const shouldRedirect = handleRedirectRecord(toLocation)
       if (shouldRedirect) {
         pushWithRedirect(
-          assign(shouldRedirect, { replace: true }),
+          assign(shouldRedirect, { replace: true, force: true }),
           toLocation
         ).catch(noop)
         return
@@ -1012,7 +1063,9 @@ export function createRouter(options: RouterOptions): Router {
             // the error is already handled by router.push we just want to avoid
             // logging the error
             pushWithRedirect(
-              (error as NavigationRedirectError).to,
+              assign(locationAsObject((error as NavigationRedirectError).to), {
+                force: true,
+              }),
               toLocation
               // avoid an uncaught rejection, let push call triggerError
             )
@@ -1081,6 +1134,7 @@ export function createRouter(options: RouterOptions): Router {
             failure
           )
         })
+        // avoid warnings in the console about uncaught rejections, they are logged by triggerErrors
         .catch(noop)
     })
   }
@@ -1088,11 +1142,11 @@ export function createRouter(options: RouterOptions): Router {
   // Initialization and Errors
 
   let readyHandlers = useCallbacks<OnReadyCallback>()
-  let errorHandlers = useCallbacks<_ErrorHandler>()
+  let errorListeners = useCallbacks<_ErrorListener>()
   let ready: boolean
 
   /**
-   * Trigger errorHandlers added via onError and throws the error as well
+   * Trigger errorListeners added via onError and throws the error as well
    *
    * @param error - error to throw
    * @param to - location we were navigating to when the error happened
@@ -1105,7 +1159,7 @@ export function createRouter(options: RouterOptions): Router {
     from: RouteLocationNormalizedLoaded
   ): Promise<unknown> {
     markAsReady(error)
-    const list = errorHandlers.list()
+    const list = errorListeners.list()
     if (list.length) {
       list.forEach(handler => handler(error, to, from))
     } else {
@@ -1114,6 +1168,7 @@ export function createRouter(options: RouterOptions): Router {
       }
       console.error(error)
     }
+    // reject the error no matter there were error listeners or not
     return Promise.reject(error)
   }
 
@@ -1151,7 +1206,8 @@ export function createRouter(options: RouterOptions): Router {
     from: RouteLocationNormalizedLoaded,
     isPush: boolean,
     isFirstNavigation: boolean
-  ): Promise<any> {
+  ): // the return is not meant to be used
+  Promise<unknown> {
     const { scrollBehavior } = options
     if (!isBrowser || !scrollBehavior) return Promise.resolve()
 
@@ -1179,6 +1235,7 @@ export function createRouter(options: RouterOptions): Router {
 
     addRoute,
     removeRoute,
+    clearRoutes: matcher.clearRoutes,
     hasRoute,
     getRoutes,
     resolve,
@@ -1194,7 +1251,7 @@ export function createRouter(options: RouterOptions): Router {
     beforeResolve: beforeResolveGuards.add,
     afterEach: afterGuards.add,
 
-    onError: errorHandlers.add,
+    onError: errorListeners.add,
     isReady,
 
     install(app: App) {
@@ -1225,18 +1282,16 @@ export function createRouter(options: RouterOptions): Router {
         })
       }
 
-      const reactiveRoute = {} as {
-        [k in keyof RouteLocationNormalizedLoaded]: ComputedRef<
-          RouteLocationNormalizedLoaded[k]
-        >
-      }
+      const reactiveRoute = {} as RouteLocationNormalizedLoaded
       for (const key in START_LOCATION_NORMALIZED) {
-        // @ts-expect-error: the key matches
-        reactiveRoute[key] = computed(() => currentRoute.value[key])
+        Object.defineProperty(reactiveRoute, key, {
+          get: () => currentRoute.value[key as keyof RouteLocationNormalized],
+          enumerable: true,
+        })
       }
 
       app.provide(routerKey, router)
-      app.provide(routeLocationKey, reactive(reactiveRoute))
+      app.provide(routeLocationKey, shallowReactive(reactiveRoute))
       app.provide(routerViewLocationKey, currentRoute)
 
       const unmountApp = app.unmount
@@ -1263,14 +1318,15 @@ export function createRouter(options: RouterOptions): Router {
     },
   }
 
-  return router
-}
+  // TODO: type this as NavigationGuardReturn or similar instead of any
+  function runGuardQueue(guards: Lazy<any>[]): Promise<any> {
+    return guards.reduce(
+      (promise, guard) => promise.then(() => runWithContext(guard)),
+      Promise.resolve()
+    )
+  }
 
-function runGuardQueue(guards: Lazy<any>[]): Promise<void> {
-  return guards.reduce(
-    (promise, guard) => promise.then(() => guard()),
-    Promise.resolve()
-  )
+  return router
 }
 
 function extractChangingRecords(
