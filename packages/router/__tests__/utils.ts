@@ -1,14 +1,9 @@
 import { JSDOM, ConstructorOptions } from 'jsdom'
 import {
-  NavigationGuard,
   RouteRecordMultipleViews,
   MatcherLocation,
-  RouteLocationNormalized,
-  _RouteRecordBase,
   RouteComponent,
   RouteRecordRaw,
-  RouteRecordName,
-  _RouteRecordProps,
 } from '../src/types'
 import { h, ComponentOptions } from 'vue'
 import {
@@ -18,7 +13,10 @@ import {
   Router,
   RouterView,
   RouteRecordNormalized,
+  NavigationGuard,
+  RouteLocationNormalized,
 } from '../src'
+import { _RouteRecordProps } from '../src/typed-routes'
 
 export const tick = (time?: number) =>
   new Promise(resolve => {
@@ -66,7 +64,7 @@ export interface RouteRecordViewLoose
 
 // @ts-expect-error we are intentionally overriding the type
 export interface RouteLocationNormalizedLoose extends RouteLocationNormalized {
-  name: RouteRecordName | null | undefined
+  name: string | symbol | null | undefined
   path: string
   // record?
   params: any
@@ -109,11 +107,15 @@ export function createDom(options?: ConstructorOptions) {
     }
   )
 
-  // @ts-expect-error: needed for jsdom
-  global.window = dom.window
-  global.location = dom.window.location
-  global.history = dom.window.history
-  global.document = dom.window.document
+  try {
+    // @ts-expect-error: not the same window
+    global.window = dom.window
+    global.location = dom.window.location
+    global.history = dom.window.history
+    global.document = dom.window.document
+  } catch (erro) {
+    // it's okay, some are readonly
+  }
 
   return dom
 }

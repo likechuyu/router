@@ -15,12 +15,13 @@ import {
   watch,
   Slot,
   VNode,
+  Component,
 } from 'vue'
-import {
+import type {
   RouteLocationNormalized,
   RouteLocationNormalizedLoaded,
-  RouteLocationMatched,
-} from './types'
+} from './typed-routes'
+import type { RouteLocationMatched } from './types'
 import {
   matchedRouteKey,
   viewDepthKey,
@@ -240,9 +241,13 @@ export const RouterView = RouterViewImpl as unknown as {
 function warnDeprecatedUsage() {
   const instance = getCurrentInstance()!
   const parentName = instance.parent && instance.parent.type.name
+  const parentSubTreeType =
+    instance.parent && instance.parent.subTree && instance.parent.subTree.type
   if (
     parentName &&
-    (parentName === 'KeepAlive' || parentName.includes('Transition'))
+    (parentName === 'KeepAlive' || parentName.includes('Transition')) &&
+    typeof parentSubTreeType === 'object' &&
+    (parentSubTreeType as Component).name === 'RouterView'
   ) {
     const comp = parentName === 'KeepAlive' ? 'keep-alive' : 'transition'
     warn(
